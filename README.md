@@ -3,7 +3,7 @@
 This project explores the use of Elixir in HPC (and my process of
 learning Elixir 🙂)
 
-For now the `nx_stencil` file can be executed with (no timing has been
+For now the `nx_stencil.ex` file can be executed with (no timing has been
 implemented yet)
 
 ```sh
