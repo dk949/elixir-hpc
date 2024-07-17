@@ -1,21 +1,14 @@
-# SimpleStencil
+# Elixir HPC exploration
 
-**TODO: Add description**
+This project explores the use of Elixir in HPC (and my process of
+learning Elixir 🙂)
 
-## Installation
+For now the `nx_stencil` file can be executed with (no timing has been
+implemented yet)
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `simple_stencil` to your list of dependencies in `mix.exs`:
-
-```elixir
-def deps do
-  [
-    {:simple_stencil, "~> 0.1.0"}
-  ]
-end
+```sh
+iex -S mix run -e "NxStencil.run"
 ```
 
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/simple_stencil>.
-
+Correctness can be verified by running the `test.py` file (proper testing coming
+soon).
