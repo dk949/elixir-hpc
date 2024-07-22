@@ -1,30 +1,44 @@
 defmodule NxStencil do
-  def enumerate(lst) do
-    Enum.zip(lst, Stream.iterate(0, &(&1 + 1)))
+  defmodule StencilData do
+    @enforce_keys [
+      :up_rank,
+      :self_rank,
+      :down_rank,
+      :top_halo,
+      :self_data,
+      :bottom_halo
+    ]
+
+    defstruct @enforce_keys
   end
 
-  def access(nil, _, _), do: 0.0
-  def access(_, x, size) when x < 0 or x > size - 1, do: 0.0
-  def access(arr, x, _), do: Enum.at(arr, x)
+  defmodule InitData do
+    @enforce_keys [:parent, :data, :iters]
 
-  def len_or_nil(nil), do: "nil"
-  def len_or_nil(v), do: inspect(length(v))
+    defstruct @enforce_keys
+  end
 
-  def compute(top_halo, data, bottom_halo) do
+  defp access(nil, _, _), do: 0.0
+  defp access(_, x, size) when x < 0 or x > size - 1, do: 0.0
+  defp access(arr, x, _), do: Enum.at(arr, x)
+
+  defp compute(top_halo, data, bottom_halo) do
     data_length = length(data)
 
     for i <- 0..(data_length - 1) do
-      (NxStencil.access(top_halo, i - 1, data_length) + NxStencil.access(top_halo, i, data_length) + NxStencil.access(top_halo, i + 1, data_length) +
-         NxStencil.access(data, i - 1, data_length) +
-         NxStencil.access(data, i, data_length) +
-         NxStencil.access(data, i + 1, data_length) +
-         NxStencil.access(bottom_halo, i - 1, data_length) +
-         NxStencil.access(bottom_halo, i, data_length) +
-         NxStencil.access(bottom_halo, i + 1, data_length)) / 9
+      (access(top_halo, i - 1, data_length) +
+         access(top_halo, i, data_length) +
+         access(top_halo, i + 1, data_length) +
+         access(data, i - 1, data_length) +
+         access(data, i, data_length) +
+         access(data, i + 1, data_length) +
+         access(bottom_halo, i - 1, data_length) +
+         access(bottom_halo, i, data_length) +
+         access(bottom_halo, i + 1, data_length)) / 9
     end
   end
 
-  def receive_from_top() do
+  defp receive_from_top() do
     receive do
       {:halo_from_top, value} -> value
     after
@@ -32,7 +46,7 @@ defmodule NxStencil do
     end
   end
 
-  def receive_from_bottom() do
+  defp receive_from_bottom() do
     receive do
       {:halo_from_bottom, value} -> value
     after
@@ -40,12 +54,12 @@ defmodule NxStencil do
     end
   end
 
-  def worker(parent, rank, _, _, _, data, _, 0) do
+  defp worker(parent, rank, _, _, _, data, _, 0) do
     IO.puts("#{rank}: finished")
     send(parent, {:end_data, rank, data})
   end
 
-  def worker(parent, rank, up, down, top_halo, data, bottom_halo, iters) do
+  defp worker(parent, rank, up, down, top_halo, data, bottom_halo, iters) do
     data = compute(top_halo, data, bottom_halo)
 
     {top_halo, bottom_halo} =
@@ -70,40 +84,65 @@ defmodule NxStencil do
     worker(parent, rank, up, down, top_halo, data, bottom_halo, iters - 1)
   end
 
-  def process_start do
+  defp process_start do
     receive do
-      {parent, :start_data,
-       {
-         rank,
-         up,
-         down,
-         top_halo,
-         init_data,
-         bottom_halo,
-         iters
-       }} ->
+      %InitData{
+        parent: parent,
+        data: %StencilData{
+          up_rank: up,
+          self_rank: rank,
+          down_rank: down,
+          top_halo: top_halo,
+          self_data: init_data,
+          bottom_halo: bottom_halo
+        },
+        iters: iters
+      } ->
         worker(parent, rank, up, down, top_halo, init_data, bottom_halo, iters)
     end
   end
 
-  def get_data(x_dim, y_dim) do
+  defp all_not_nil(lst) do
+    lst
+    |> Stream.map(fn x -> x != nil end)
+    |> Enum.reduce(true, fn x, acc -> x and acc end)
+  end
+
+  defp collect_impl(list) do
+    # Can't call function in guard?
+    if all_not_nil(list) do
+      list
+    else
+      receive do
+        {:end_data, rank, data} -> collect_impl(list |> List.replace_at(rank, data))
+      end
+    end
+  end
+
+  defp collect(count) do
+    collect_impl(List.duplicate(nil, count))
+  end
+
+  defp get_data(x_dim, y_dim) do
     # 2d array of incrementing numbers from 0 to x*y
     # Nx.tensor(Enum.chunk_every(0..(x_dim * y_dim - 1), y_dim), type: :f64)
     Enum.chunk_every(0..(x_dim * y_dim - 1), y_dim)
   end
 
-  def run() do
+  defp run_impl() do
     # For now, process count == row count
-    proc_count = 5
-    iters = 10
+    proc_count = 64
+    iters = 100
+    x_dim = proc_count
+    y_dim = 1000
     IO.puts("start")
-    data = NxStencil.get_data(proc_count, 10)
+    data = get_data(x_dim, y_dim)
 
     procs =
       for rank <- 0..(proc_count - 1) do
         {
           rank,
-          spawn(&NxStencil.process_start/0)
+          spawn(&process_start/0)
         }
       end
 
@@ -120,16 +159,18 @@ defmodule NxStencil do
                      ] ->
         send(
           this,
-          {self(), :start_data,
-           {
-             this_rank,
-             up,
-             down,
-             top_halo,
-             init_data,
-             bottom_halo,
-             iters
-           }}
+          %InitData{
+            parent: self(),
+            data: %StencilData{
+              up_rank: up,
+              self_rank: this_rank,
+              down_rank: down,
+              top_halo: top_halo,
+              self_data: init_data,
+              bottom_halo: bottom_halo
+            },
+            iters: iters
+          }
         )
 
         this
@@ -142,32 +183,33 @@ defmodule NxStencil do
 
     send(
       fst,
-      {self(), :start_data,
-       {
-         fst_rank,
-         nil,
-         List.first(inner_pids),
-         nil,
-         Enum.at(data, 0),
-         Enum.at(data, 1),
-         iters
-       }}
+      %InitData{
+        parent: self(),
+        data: %StencilData{
+          up_rank: nil,
+          self_rank: fst_rank,
+          down_rank: List.first(inner_pids),
+          top_halo: nil,
+          self_data: Enum.at(data, 0),
+          bottom_halo: Enum.at(data, 1)
+        },
+        iters: iters
+      }
     )
 
     send(
       lst,
-      {
-        self(),
-        :start_data,
-        {
-          lst_rank,
-          List.last(inner_pids),
-          nil,
-          Enum.at(data, length(data) - 2),
-          Enum.at(data, length(data) - 1),
-          nil,
-          iters
-        }
+      %InitData{
+        parent: self(),
+        data: %StencilData{
+          up_rank: List.last(inner_pids),
+          self_rank: lst_rank,
+          down_rank: nil,
+          top_halo: Enum.at(data, length(data) - 2),
+          self_data: Enum.at(data, length(data) - 1),
+          bottom_halo: nil
+        },
+        iters: iters
       }
     )
 
@@ -175,13 +217,13 @@ defmodule NxStencil do
 
     IO.puts("Waiting for result")
 
-    for rank <- 0..(proc_count - 1) do
-      receive do
-        {:end_data, ^rank, data} ->
-          IO.puts("from #{rank} -> #{inspect(data)}")
-      after
-        2000 -> IO.puts("Could not receive from rank #{rank}")
-      end
-    end
+    collect(proc_count)
+  end
+
+  def run(out \\ "data_out.json") do
+    {time, data} = :timer.tc(&run_impl/0)
+    IO.puts("Took #{time / 1000_000}s")
+
+    File.write(out, data |> inspect(limit: :infinity))
   end
 end
